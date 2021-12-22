@@ -1,0 +1,159 @@
+---
+title: "Practice Assignment 6"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+## 1. Load and merge the dataset
+
+```{r}
+#install.packages("dplyr")
+library(dplyr)    # using "dplyr" package to manipulate the data frames
+```
+
+Loading "speeches.csv" into data frame.
+
+```{r}
+speeches <- read.csv("speeches.csv", header=TRUE, sep='|')    # the separator is '|'
+# check the values in R Environment, there are 1345 records and 5 variables
+#length(unique(speeches$date))   # unique records based on date are 1051
+```
+
+We want to keep only the "date" and "contents" columns.
+
+```{r}
+speeches <- speeches[!is.na(speeches$contents),c('date', 'contents')] 
+# check the values in R Environment, there are 1345 records and 2 variables
+```
+
+For the same day, there can be a few speeches. Total 1345 records with 1051 unique dates.
+In order to merge correctly with the exchange rate data, we put all the contents together.
+
+```{r}
+speeches <- speeches %>% 
+  group_by(date) %>%    # group the speeches by unique date
+  summarise(contents = paste(contents, collapse = " "))   # collapse to join rows with " "
+# check the values in R Environment, there are 1051 records and 2 variables
+```
+
+Loading "fx.csv" into data frame.
+
+```{r}
+fx <- read.csv("fx.csv", skip=4, header=TRUE, check.names=FALSE)    
+    # the headers are "Period\Unit:" and "[US dollar]"
+colnames(fx) <- c("date", "exchange_rate")    # replace headers name
+# check the values in R Environment, there are 5932 records and 2 variables
+```
+
+Merging the data together.
+
+```{r}
+df <- fx %>% left_join(speeches)    # merge data
+df$exchange_rate <- as.numeric(df$exchange_rate)    # change data type to numeric
+df$date <- as.Date(df$date)   # change data type to Date
+# check the values in R Environment, there are 5932 records and 3 variables
+```
+
+## 2. Remove entries with obvious outliers or mistakes
+
+We first see if there is any obvious outliers or mistakes by plotting the data:
+
+```{r}
+plot(df$date, df$exchange_rate, type ='l', xlab ="date", ylab ="EUR/USD reference exchange rate")
+```
+
+And look at the summary statistics:
+
+```{r}
+summary(df)
+```
+
+The data does not seem to have obvious outliers or mistakes, but there is 62 missing data (NA). 
+
+## 3.	Handle missing observations
+
+We use the `na.locf()` "Last Observation Carried Forward" from `zoo` package, for replacing each NA with the most recent non-NA prior to it.
+
+There are some "date gaps" in the data as well. For this assignment we will not handle them.
+
+```{r}
+#install.packages("zoo")
+library(zoo)    # using "zoo" package to calculate irregular time series
+
+df$exchange_rate <- na.locf(df$exchange_rate, fromLast=TRUE)
+    # Note fromLast should set to TRUE as date is in descending order
+summary(df)
+```
+
+## 4. Calculate the exchange rate return
+
+Get the return by using the formula: $R_{t} = \frac{P_{t}-P_{t-1}}{P_{t-1}}$
+
+```{r}
+df$return <- c(diff(df$exchange_rate)/df$exchange_rate[-1], NA)   
+    # add new variable "return", with "lagged differences"/"previous value"
+```
+
+Extend the original dataset with the variables "good_news" and "bad_news".
+
+```{r}
+df$good_news <- as.numeric(df$return > 0.5/100)   # larger than 0.5 percent, true=1
+df$bad_news <- as.numeric(df$return < -0.5/100)   # smaller than -0.5 percent, true=1
+```
+
+## 5. Remove the entries for which contents is NA
+
+```{r}
+#install.packages("tidyr")
+library(tidyr)    # using "tidyr" package to clean up data   
+
+df <- df %>% drop_na(contents)    # remove rows with NA 
+# check the values in R Environment, there are 974 records and 6 variables
+```
+
+## 5a/b. Generate and store "good_indicators" and "bad_indicators"
+
+Load in some stop words, which are words that used to form a sentence but does not add much meaning to a sentence. Example of stop words are "a", "the" "does", "i", etc. 
+
+```{r}
+#install.packages("stopwords")
+stop_words <- stopwords::stopwords()
+# check the values in R Environment, there are 175 stop words
+```
+
+The function below get the most common words (excluding stop_words) related to `good_news` and `bad_news`:
+
+```{r}
+library(text2vec)
+
+get_word_freq <- function(contents, stop_words, num_words) {
+  words <- unlist(lapply(contents, word_tokenizer))   # turn a paragraph to a vector of words
+  words <- tolower(words)   # turn all words to lowercase
+  freq <- table(words)      # find out the number of appearance of each word
+  freq <- freq[!(names(freq) %in% stop_words)]    # remove the stop words
+  names(freq[order(-freq)])[1:num_words]    # sort the words from appearing most to least
+}
+```
+
+Use the function above to get the 20 most common words associated with `good_news` and `bad_news`:
+
+```{r}
+good_news_contents <- df$contents[df$good_news==1]    # contents related to 137 "good_news" 
+bad_news_contents <- df$contents[df$bad_news==1]      # contents related to 143 "bad_news"
+good_indicators <- get_word_freq(good_news_contents, stop_words, num_words = 20)
+bad_indicators <- get_word_freq(bad_news_contents, stop_words, num_words = 20)
+good_indicators
+bad_indicators
+```
+
+Store the results in csv files.
+
+```{r}
+write.table(good_indicators, file="good_indicators.csv", sep=",")
+write.table(bad_indicators, file="bad_indicators.csv", sep=",")
+```
+
+Observation found: many terms appear in both indicators.
